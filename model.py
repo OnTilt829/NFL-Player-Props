@@ -77,6 +77,10 @@ def build(season, week, output):
         receiving_tds = (p["receiving_tds"] / p.games + defense.loc[opp, "receiving_tds"] * receive_share) / 2
         row["rushing_receiving_tds"] = round(rush_tds + receiving_tds, 2)
         row["receiving_tds"] = round(receiving_tds, 2)
+        if p.position in ("WR", "TE"):
+            row["tds"] = round(receiving_tds, 2)
+            row.pop("rushing_yards", None)
+            row.pop("rushing_receiving_tds", None)
         rows.append(row)
     if not rows:
         raise ValueError("No projections created: check schedule and player data")
@@ -94,7 +98,7 @@ def build(season, week, output):
     layouts = {
         "QB": ["player","team","opponent","games","passing_yards","passing_tds","rushing_yards","rushing_receiving_tds"],
         "RB": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions","rushing_receiving_tds"],
-        "WR": ["player","team","opponent","games","receptions","receiving_yards","receiving_tds"],
+        "WR": ["player","team","opponent","games","receptions","receiving_yards","tds"],
         "TE": ["player","team","opponent","games","receptions","receiving_yards","receiving_tds"],
     }
     csv_path = Path(output).with_suffix(".csv")
@@ -112,7 +116,7 @@ def build(season, week, output):
             sheet.set_column(3, len(columns)-1, 19)
             header = writer.book.add_format({"bold": True, "bg_color": "#17365D", "font_color": "#FFFFFF"})
             for idx, name in enumerate(columns):
-                sheet.write(0, idx, name.replace("_", " ").title(), header)
+                sheet.write(0, idx, "TDs" if name == "tds" else name.replace("_", " ").title().replace("Tds", "TDs"), header)
 
         breakdown = writer.book.add_worksheet("Game Breakdown")
         breakdown.set_column("A:N", 16)
