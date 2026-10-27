@@ -1,0 +1,59 @@
+name: Publish NFL Performance Projections
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: NFL season (e.g. 2026)
+        required: false
+      week:
+        description: NFL week (e.g. 9)
+        required: false
+  schedule:
+    - cron: '0 13 * * 2'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Identify next scheduled NFL week
+        env:
+          INPUT_SEASON: ${{ inputs.season }}
+          INPUT_WEEK: ${{ inputs.week }}
+        run: |
+          python - <<'PY'
+          import os, pandas as pd
+          from datetime import datetime, timezone
+          from pathlib import Path
+          season = os.getenv("INPUT_SEASON") or str(datetime.now(timezone.utc).year)
+          week = os.getenv("INPUT_WEEK")
+          if not week:
+              schedule = pd.read_csv("https://github.com/nflverse/nfldata/raw/master/data/games.csv")
+              schedule = schedule[(schedule.season == int(season)) & (schedule.game_type == "REG")].copy()
+              schedule["gameday"] = pd.to_datetime(schedule["gameday"], errors="coerce")
+              upcoming = schedule[schedule.gameday >= pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()].sort_values("gameday")
+              if upcoming.empty:
+                  raise ValueError("No upcoming regular-season NFL week available")
+              week = str(int(upcoming.iloc[0]["week"]))
+          with open(os.environ["GITHUB_ENV"],"a") as f:
+              f.write(f"SEASON={season}\nWEEK={week}\n")
+          print(f"Publishing NFL season {season} week {week}")
+          PY
+      - name: Generate NFL player performance projections
+        run: python model.py --season "$SEASON" --week "$WEEK" --output output/projections.xlsx
+      - name: Publish CSV to GitHub for PropPlus
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add output/projections.csv
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish NFL performance projections for week $WEEK"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
