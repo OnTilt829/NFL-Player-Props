@@ -1,0 +1,51 @@
+name: NFL weekly projections
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: NFL season year
+        required: true
+        default: '2026'
+      week:
+        description: NFL week
+        required: true
+        default: '9'
+  schedule:
+    - cron: '0 12 * * 2'
+permissions:
+  contents: read
+jobs:
+  project:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Generate projections
+        env:
+          SEASON: ${{ inputs.season }}
+          WEEK: ${{ inputs.week }}
+        run: |
+          python - <<'PY'
+          import os, datetime, subprocess, sys
+          import nfl_data_py as nfl
+          import pandas as pd
+          season = int(os.getenv('SEASON') or datetime.date.today().year)
+          week = int(os.getenv('WEEK') or 0)
+          if not week:
+              s = nfl.import_schedules([season])
+              s['gameday'] = pd.to_datetime(s['gameday'], utc=True)
+              future = s[(s['gameday'] >= pd.Timestamp.now(tz='UTC')) & (s['game_type'] == 'REG')]
+              if future.empty:
+                  raise ValueError('No remaining regular-season games')
+              week = int(future.sort_values('gameday').iloc[0]['week'])
+          subprocess.run([sys.executable, 'model.py', '--season', str(season), '--week', str(week), '--output', 'output/projections.csv'], check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nfl-projections
+          path: output/projections.csv
+          if-no-files-found: error
