@@ -96,6 +96,9 @@ def build(season, week, output):
         "WR": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions","rushing_receiving_tds"],
         "TE": ["player","team","opponent","games","receiving_yards","receptions","rushing_receiving_tds"],
     }
+    csv_path = Path(output).with_suffix(".csv")
+    result.to_csv(csv_path, index=False)
+    print(f"Saved {len(result)} NFL performance projections: {csv_path}")
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for position, columns in layouts.items():
             subset = result.loc[result.position == position, columns]
