@@ -42,10 +42,10 @@ jobs:
               if future.empty:
                   raise ValueError('No remaining regular-season games')
               week = int(future.sort_values('gameday').iloc[0]['week'])
-          subprocess.run([sys.executable, 'model.py', '--season', str(season), '--week', str(week), '--output', 'output/projections.csv'], check=True)
+          subprocess.run([sys.executable, 'model.py', '--season', str(season), '--week', str(week), '--output', 'output/projections.xlsx'], check=True)
           PY
       - uses: actions/upload-artifact@v4
         with:
           name: nfl-projections
-          path: output/projections.csv
+          path: output/projections.xlsx
           if-no-files-found: error
