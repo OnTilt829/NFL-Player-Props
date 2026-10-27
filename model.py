@@ -81,6 +81,15 @@ def build(season, week, output):
         raise ValueError("No projections created: check schedule and player data")
     Path(output).parent.mkdir(parents=True,exist_ok=True)
     result = pd.DataFrame(rows).sort_values(["team", "player"])
+    q = stats[stats.position.eq("QB")].copy()
+    last = q.groupby("recent_team").week.transform("max")
+    recent = q[q.week.eq(last)].groupby(["recent_team","player_id"]).attempts.sum().rename("recent")
+    total = q.groupby(["recent_team","player_id"]).attempts.sum().rename("total")
+    ranks = pd.concat([recent,total],axis=1).fillna(0).reset_index()
+    best = ranks.sort_values(["recent_team","recent","total"],ascending=[True,False,False]).drop_duplicates("recent_team")
+    chosen = set(zip(best.recent_team,best.player_id))
+    names = set(zip(q[q.apply(lambda x:(x.recent_team,x.player_id) in chosen,axis=1)].recent_team,q[q.apply(lambda x:(x.recent_team,x.player_id) in chosen,axis=1)].player_display_name))
+    result = result[(result.position != "QB") | result.apply(lambda x:(x.team,x.player) in names,axis=1)].copy()
     layouts = {
         "QB": ["player","team","opponent","games","passing_yards","passing_tds","rushing_yards","rushing_receiving_tds"],
         "RB": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions","rushing_receiving_tds"],
@@ -101,7 +110,43 @@ def build(season, week, output):
             for idx, name in enumerate(columns):
                 sheet.write(0, idx, name.replace("_", " ").title(), header)
 
-    print(f"Created {len(rows)} player performance forecasts: {output}")
+        breakdown = writer.book.add_worksheet("Game Breakdown")
+        breakdown.set_column("A:N", 16)
+        breakdown.set_column("A:A", 26)
+        breakdown.set_column("F:F", 26)
+        breakdown.set_column("K:K", 26)
+        title = writer.book.add_format({"bold":True,"font_size":14,"bg_color":"#17365D","font_color":"white"})
+        head = writer.book.add_format({"bold":True,"bg_color":"#DCE6F1"})
+        for game_index, (_, game) in enumerate(upcoming.sort_values("gameday").iterrows()):
+            base_row = game_index * 42
+            away, home = game.away_team, game.home_team
+            group = result[result.team.isin([away,home])]
+            breakdown.merge_range(base_row,0,base_row,13,f"{away} @ {home} | {game.get('gameday','')}",title)
+            specs = [
+                ("Passing",0,group[group.position.eq("QB")],["player","team","passing_yards","passing_tds"]),
+                ("Rushing",5,group[group.position.isin(["QB","RB","WR"])],["player","team","rushing_yards","rushing_receiving_tds"]),
+                ("Receiving",10,group[group.position.isin(["RB","WR","TE"])],["player","team","receiving_yards","receptions"]),
+            ]
+            for label,col,frame,cols in specs:
+                frame = frame.sort_values(cols[2],ascending=False).head(15)
+                breakdown.write(base_row+2,col,label,head)
+                for j,key in enumerate(cols):
+                    breakdown.write(base_row+3,col+j,key.replace("_"," ").title(),head)
+                for i,(_,rec) in enumerate(frame.iterrows()):
+                    for j,key in enumerate(cols):
+                        value=rec[key]
+                        if key in ("player","team"):
+                            breakdown.write_string(base_row+4+i,col+j,str(value))
+                        else:
+                            breakdown.write_number(base_row+4+i,col+j,float(value))
+                if len(frame):
+                    chart=writer.book.add_chart({"type":"column"})
+                    chart.add_series({"name":cols[2],"categories":["Game Breakdown",base_row+4,col,base_row+3+len(frame),col],"values":["Game Breakdown",base_row+4,col+2,base_row+3+len(frame),col+2]})
+                    chart.set_title({"name":f"{label}: {away} @ {home}"})
+                    chart.set_legend({"none":True})
+                    chart.set_size({"width":430,"height":250})
+                    breakdown.insert_chart(base_row+21,col,chart)
+    print(f"Created {len(result)} player performance forecasts: {output}")
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser()
