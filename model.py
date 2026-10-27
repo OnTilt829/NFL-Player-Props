@@ -76,6 +76,7 @@ def build(season, week, output):
         rush_tds = (p["rushing_tds"] / p.games + defense.loc[opp, "rushing_tds"] * rush_share) / 2
         receiving_tds = (p["receiving_tds"] / p.games + defense.loc[opp, "receiving_tds"] * receive_share) / 2
         row["rushing_receiving_tds"] = round(rush_tds + receiving_tds, 2)
+        row["receiving_tds"] = round(receiving_tds, 2)
         rows.append(row)
     if not rows:
         raise ValueError("No projections created: check schedule and player data")
@@ -93,8 +94,8 @@ def build(season, week, output):
     layouts = {
         "QB": ["player","team","opponent","games","passing_yards","passing_tds","rushing_yards","rushing_receiving_tds"],
         "RB": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions","rushing_receiving_tds"],
-        "WR": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions","rushing_receiving_tds"],
-        "TE": ["player","team","opponent","games","receiving_yards","receptions","rushing_receiving_tds"],
+        "WR": ["player","team","opponent","games","receptions","receiving_yards","receiving_tds"],
+        "TE": ["player","team","opponent","games","receptions","receiving_yards","receiving_tds"],
     }
     csv_path = Path(output).with_suffix(".csv")
     result.to_csv(csv_path, index=False)
