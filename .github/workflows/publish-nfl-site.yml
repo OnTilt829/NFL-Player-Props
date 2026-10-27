@@ -9,7 +9,12 @@ on:
         description: NFL week (e.g. 9)
         required: false
   schedule:
-    - cron: '0 13 * * 2'
+    - cron: '0 12 * * *'
+    - cron: '0 13 * * *'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-nfl-site.yml'
 permissions:
   contents: write
 jobs:
@@ -17,12 +22,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Verify 8 AM Eastern schedule or manual/push run
+        id: eastern
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$(TZ=America/New_York date +%H)" = "08" ]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        if: steps.eastern.outputs.run == 'true'
       - uses: actions/setup-python@v5
+        if: steps.eastern.outputs.run == 'true'
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
+        if: steps.eastern.outputs.run == 'true'
       - name: Identify next scheduled NFL week
+        if: steps.eastern.outputs.run == 'true'
         env:
           INPUT_SEASON: ${{ inputs.season }}
           INPUT_WEEK: ${{ inputs.week }}
@@ -34,7 +51,7 @@ jobs:
           season = os.getenv("INPUT_SEASON") or str(datetime.now(timezone.utc).year)
           week = os.getenv("INPUT_WEEK")
           if not week:
-              schedule = pd.read_csv("https://github.com/nflverse/nfldata/raw/master/data/games.csv")
+              schedule = pd.read_csv("https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv")
               schedule = schedule[(schedule.season == int(season)) & (schedule.game_type == "REG")].copy()
               schedule["gameday"] = pd.to_datetime(schedule["gameday"], errors="coerce")
               upcoming = schedule[schedule.gameday >= pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()].sort_values("gameday")
@@ -46,8 +63,10 @@ jobs:
           print(f"Publishing NFL season {season} week {week}")
           PY
       - name: Generate NFL player performance projections
+        if: steps.eastern.outputs.run == 'true'
         run: python model.py --season "$SEASON" --week "$WEEK" --output output/projections.xlsx
       - name: Publish CSV to GitHub for PropPlus
+        if: steps.eastern.outputs.run == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
