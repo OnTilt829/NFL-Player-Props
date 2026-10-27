@@ -1,0 +1,4 @@
+nfl_data_py>=0.3.3
+pandas>=2.0
+numpy>=1.24
+pyarrow>=12
