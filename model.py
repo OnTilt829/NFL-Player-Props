@@ -1,67 +1,82 @@
-"""NFL player projections using nflverse player stats and schedules."""
+"""NFL player performance forecasts (non-wagering research baseline)."""
 import argparse
 from pathlib import Path
 import pandas as pd
 
 BASE = "https://github.com/nflverse/nflverse-data/releases/download"
-STATS = {"passing_yards": ("attempts", "passing_yards"), "rushing_yards": ("carries", "rushing_yards"), "receiving_yards": ("targets", "receiving_yards"), "receptions": ("targets", "receptions")}
-COLS = sorted(set(x for pair in STATS.values() for x in pair))
+METRICS = {"passing_yards":"attempts","rushing_yards":"carries","receiving_yards":"targets","receptions":"targets"}
+FIELDS = sorted(set(METRICS) | set(METRICS.values()))
 
-def download_parquet(url):
+def fetch(url, kind):
     try:
-        return pd.read_parquet(url)
+        return pd.read_parquet(url) if kind == "parquet" else pd.read_csv(url)
     except Exception as exc:
-        raise RuntimeError(f"Failed to load NFL data from {url}: {exc}") from exc
+        raise RuntimeError(f"Cannot download {url}: {exc}") from exc
 
 def build(season, week, output):
-    # nflverse player_stats release includes one parquet file per season.
-    weekly = download_parquet(f"{BASE}/player_stats/player_stats_{season}.parquet")
-    schedule = pd.read_csv(f"{BASE}/schedules/games.csv")
-    for col in ["season", "week"]:
-        weekly[col] = pd.to_numeric(weekly[col], errors="coerce")
+    stats_url = f"{BASE}/stats_player/stats_player_week_{season}.parquet"
+    stats = fetch(stats_url, "parquet")
+    schedule = fetch(f"{BASE}/schedules/games.csv", "csv")
+    if "team" in stats.columns and "recent_team" not in stats.columns:
+        stats = stats.rename(columns={"team":"recent_team"})
+    for col in ("season","week"):
+        stats[col] = pd.to_numeric(stats[col], errors="coerce")
         schedule[col] = pd.to_numeric(schedule[col], errors="coerce")
-    weekly = weekly[(weekly.season == season) & (weekly.week < week)]
-    if "season_type" in weekly.columns:
-        weekly = weekly[weekly.season_type == "REG"]
-    if weekly.empty:
-        raise ValueError("No completed regular-season player stats found for selected week")
-    games = schedule[(schedule.season == season) & (schedule.week == week) & (schedule.game_type == "REG")]
-    opponents = {}
-    for _, g in games.iterrows():
-        opponents[g.home_team] = g.away_team
-        opponents[g.away_team] = g.home_team
-    if not opponents:
-        raise ValueError("No matchups found for requested season/week")
-    required = ["player_id", "player_display_name", "position", "recent_team", "opponent_team"] + COLS
-    missing = [c for c in required if c not in weekly.columns]
-    if missing:
-        raise ValueError(f"Player stats missing columns: {missing}")
-    weekly[COLS] = weekly[COLS].apply(pd.to_numeric, errors="coerce").fillna(0)
-    defense = weekly.groupby(["opponent_team", "week"], as_index=False)[COLS].sum().groupby("opponent_team")[COLS].mean()
-    players = weekly.groupby(["player_id", "player_display_name", "position", "recent_team"], as_index=False).agg(
-        games=("week", "nunique"), **{c: (c, "sum") for c in COLS})
-    teams = weekly.groupby("recent_team")[["attempts", "carries", "targets"]].sum()
+    stats = stats[(stats.season == season) & (stats.week < week)].copy()
+    if "season_type" in stats.columns:
+        stats = stats[stats.season_type == "REG"]
+    schedule = schedule[(schedule.season == season) & (schedule.game_type == "REG")].copy()
+    if stats.empty:
+        raise ValueError("No completed player games available before the requested week")
+    needed = ["player_id","player_display_name","position","recent_team"] + FIELDS
+    absent = [x for x in needed if x not in stats.columns]
+    if absent:
+        raise ValueError(f"Source schema changed; missing columns: {absent}")
+    for metric in FIELDS:
+        stats[metric] = pd.to_numeric(stats[metric], errors="coerce").fillna(0)
+    matchups = {}
+    for _, game in schedule.iterrows():
+        matchups[(int(game.week),game.home_team)] = game.away_team
+        matchups[(int(game.week),game.away_team)] = game.home_team
+    stats["opponent"] = [matchups.get((int(w),t)) for w,t in zip(stats.week,stats.recent_team)]
+    if stats.opponent.notna().sum() == 0:
+        raise ValueError("No historical player rows could be matched to NFL schedule")
+    upcoming = schedule[schedule.week == week]
+    current = {}
+    for _, game in upcoming.iterrows():
+        current[game.home_team] = game.away_team
+        current[game.away_team] = game.home_team
+    if not current:
+        raise ValueError("No scheduled games in the selected week")
+    # Defense totals by opposing team and week, then average across games.
+    allowed = stats.dropna(subset=["opponent"]).groupby(["opponent","week"],as_index=False)[FIELDS].sum()
+    defense = allowed.groupby("opponent")[FIELDS].mean()
+    player = stats.groupby(["player_id","player_display_name","position","recent_team"],as_index=False).agg(
+        games=("week","nunique"),**{c:(c,"sum") for c in FIELDS})
+    team_totals = stats.groupby("recent_team")[list(set(METRICS.values()))].sum()
     rows = []
-    for _, p in players.iterrows():
-        opp = opponents.get(p.recent_team)
-        if not opp or opp not in defense.index or p.games <= 0:
+    for _, p in player.iterrows():
+        team, opp = p.recent_team, current.get(p.recent_team)
+        if opp is None or opp not in defense.index or team not in team_totals.index or p.games == 0:
             continue
-        d, t = defense.loc[opp], teams.loc[p.recent_team]
-        row = dict(player=p.player_display_name, team=p.recent_team, opponent=opp, position=p.position, games=int(p.games))
-        for stat, (volume, metric) in STATS.items():
-            share = p[volume] / t[volume] if t[volume] else 0
-            row[stat] = round((p[metric] / p.games + d[metric] * share) / 2, 2)
+        row = {"player":p.player_display_name,"team":team,"opponent":opp,"position":p.position,"games":int(p.games)}
+        for metric, opportunity in METRICS.items():
+            player_avg = p[metric] / p.games
+            team_opportunities = team_totals.loc[team,opportunity]
+            share = p[opportunity] / team_opportunities if team_opportunities else 0
+            opponent_adj = defense.loc[opp,metric] * share
+            row[metric] = round((player_avg + opponent_adj) / 2,2)
         rows.append(row)
     if not rows:
-        raise ValueError("No players matched scheduled teams")
-    Path(output).parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).sort_values(["team", "position", "player"]).to_csv(output, index=False)
-    print(f"Wrote {len(rows)} projections to {output}")
+        raise ValueError("No projections created: check schedule and player data")
+    Path(output).parent.mkdir(parents=True,exist_ok=True)
+    pd.DataFrame(rows).sort_values(["team","position","player"]).to_csv(output,index=False)
+    print(f"Created {len(rows)} player performance forecasts: {output}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--season", type=int, required=True)
-    parser.add_argument("--week", type=int, required=True)
-    parser.add_argument("--output", default="output/projections.csv")
-    args = parser.parse_args()
-    build(args.season, args.week, args.output)
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--season",type=int,required=True)
+    ap.add_argument("--week",type=int,required=True)
+    ap.add_argument("--output",default="output/projections.csv")
+    a=ap.parse_args()
+    build(a.season,a.week,a.output)
