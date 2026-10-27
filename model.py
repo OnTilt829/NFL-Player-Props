@@ -23,6 +23,7 @@ def build(season, week, output):
         stats[col] = pd.to_numeric(stats[col], errors="coerce")
         schedule[col] = pd.to_numeric(schedule[col], errors="coerce")
     stats = stats[(stats.season == season) & (stats.week < week)].copy()
+    stats = stats[stats["position"].isin(["QB", "RB", "WR", "TE"])].copy()
     if "season_type" in stats.columns:
         stats = stats[stats.season_type == "REG"]
     schedule = schedule[(schedule.season == season) & (schedule.game_type == "REG")].copy()
@@ -70,13 +71,33 @@ def build(season, week, output):
     if not rows:
         raise ValueError("No projections created: check schedule and player data")
     Path(output).parent.mkdir(parents=True,exist_ok=True)
-    pd.DataFrame(rows).sort_values(["team","position","player"]).to_csv(output,index=False)
+    result = pd.DataFrame(rows).sort_values(["team", "player"])
+    layouts = {
+        "QB": ["player","team","opponent","games","passing_yards","rushing_yards"],
+        "RB": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions"],
+        "WR": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions"],
+        "TE": ["player","team","opponent","games","receiving_yards","receptions"],
+    }
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        for position, columns in layouts.items():
+            subset = result.loc[result.position == position, columns]
+            subset.to_excel(writer, sheet_name=position, index=False)
+            sheet = writer.sheets[position]
+            sheet.freeze_panes(1, 4)
+            sheet.autofilter(0, 0, len(subset), len(columns)-1)
+            sheet.set_column(0, 0, 27)
+            sheet.set_column(1, 2, 15)
+            sheet.set_column(3, len(columns)-1, 19)
+            header = writer.book.add_format({"bold": True, "bg_color": "#17365D", "font_color": "#FFFFFF"})
+            for idx, name in enumerate(columns):
+                sheet.write(0, idx, name.replace("_", " ").title(), header)
+
     print(f"Created {len(rows)} player performance forecasts: {output}")
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser()
     ap.add_argument("--season",type=int,required=True)
     ap.add_argument("--week",type=int,required=True)
-    ap.add_argument("--output",default="output/projections.csv")
+    ap.add_argument("--output",default="output/projections.xlsx")
     a=ap.parse_args()
     build(a.season,a.week,a.output)
