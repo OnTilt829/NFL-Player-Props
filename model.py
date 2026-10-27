@@ -5,7 +5,8 @@ import pandas as pd
 
 BASE = "https://github.com/nflverse/nflverse-data/releases/download"
 METRICS = {"passing_yards":"attempts","rushing_yards":"carries","receiving_yards":"targets","receptions":"targets"}
-FIELDS = sorted(set(METRICS) | set(METRICS.values()))
+TD_FIELDS = ["passing_tds", "rushing_tds", "receiving_tds"]
+FIELDS = sorted(set(METRICS) | set(METRICS.values()) | set(TD_FIELDS))
 
 def fetch(url, kind):
     try:
@@ -67,16 +68,24 @@ def build(season, week, output):
             share = p[opportunity] / team_opportunities if team_opportunities else 0
             opponent_adj = defense.loc[opp,metric] * share
             row[metric] = round((player_avg + opponent_adj) / 2,2)
+        pass_share = p["attempts"] / team_totals.loc[team, "attempts"] if team_totals.loc[team, "attempts"] else 0
+        rush_share = p["carries"] / team_totals.loc[team, "carries"] if team_totals.loc[team, "carries"] else 0
+        receive_share = p["targets"] / team_totals.loc[team, "targets"] if team_totals.loc[team, "targets"] else 0
+        if p.position == "QB":
+            row["passing_tds"] = round((p["passing_tds"] / p.games + defense.loc[opp, "passing_tds"] * pass_share) / 2, 2)
+        rush_tds = (p["rushing_tds"] / p.games + defense.loc[opp, "rushing_tds"] * rush_share) / 2
+        receiving_tds = (p["receiving_tds"] / p.games + defense.loc[opp, "receiving_tds"] * receive_share) / 2
+        row["rushing_receiving_tds"] = round(rush_tds + receiving_tds, 2)
         rows.append(row)
     if not rows:
         raise ValueError("No projections created: check schedule and player data")
     Path(output).parent.mkdir(parents=True,exist_ok=True)
     result = pd.DataFrame(rows).sort_values(["team", "player"])
     layouts = {
-        "QB": ["player","team","opponent","games","passing_yards","rushing_yards"],
-        "RB": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions"],
-        "WR": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions"],
-        "TE": ["player","team","opponent","games","receiving_yards","receptions"],
+        "QB": ["player","team","opponent","games","passing_yards","passing_tds","rushing_yards","rushing_receiving_tds"],
+        "RB": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions","rushing_receiving_tds"],
+        "WR": ["player","team","opponent","games","rushing_yards","receiving_yards","receptions","rushing_receiving_tds"],
+        "TE": ["player","team","opponent","games","receiving_yards","receptions","rushing_receiving_tds"],
     }
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for position, columns in layouts.items():
