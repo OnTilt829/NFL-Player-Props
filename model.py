@@ -146,7 +146,11 @@ def build(season, week, output):
                         if key in ("player","team"):
                             breakdown.write_string(base_row+4+i,col+j,str(value))
                         else:
-                            breakdown.write_number(base_row+4+i,col+j,float(value))
+                            number = float(value)
+                            if pd.notna(number) and number != float('inf') and number != float('-inf'):
+                                breakdown.write_number(base_row+4+i,col+j,number)
+                            else:
+                                breakdown.write_blank(base_row+4+i,col+j,None)
                 if len(frame):
                     chart=writer.book.add_chart({"type":"column"})
                     chart.add_series({"name":cols[2],"categories":["Game Breakdown",base_row+4,col,base_row+3+len(frame),col],"values":["Game Breakdown",base_row+4,col+2,base_row+3+len(frame),col+2]})
