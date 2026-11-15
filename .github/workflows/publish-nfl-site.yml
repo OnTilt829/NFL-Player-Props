@@ -15,6 +15,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/publish-nfl-site.yml'
+      - 'model.py'
 permissions:
   contents: write
 jobs:
@@ -24,12 +25,27 @@ jobs:
     steps:
       - name: Verify 8 AM Eastern schedule or manual/push run
         id: eastern
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE_CRON: ${{ github.event.schedule }}
         run: |
-          if [ "${{ github.event_name }}" != "schedule" ] || [ "$(TZ=America/New_York date +%H)" = "08" ]; then
-            echo 'run=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'run=false' >> "$GITHUB_OUTPUT"
-          fi
+          python - <<'PY'
+          import datetime, os
+          from zoneinfo import ZoneInfo
+          event = os.environ["EVENT_NAME"]
+          if event != "schedule":
+              run = True
+          else:
+              # Use the scheduled UTC slot, not the actual runner start time.
+              # This also makes retries of the 8 AM slot work later in the day.
+              eastern = datetime.datetime.now(ZoneInfo("America/New_York"))
+              scheduled_hour = int(os.environ["SCHEDULE_CRON"].split()[1])
+              expected_hour = 12 if eastern.utcoffset().total_seconds() == -4 * 3600 else 13
+              run = scheduled_hour == expected_hour
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"run={str(run).lower()}\n")
+          print(f"Event={event}, scheduled slot={os.getenv('SCHEDULE_CRON')}, run={run}")
+          PY
       - uses: actions/checkout@v4
         if: steps.eastern.outputs.run == 'true'
       - uses: actions/setup-python@v5
